@@ -1,104 +1,95 @@
-﻿#include <iostream>
-#include <windows.h>
-#include <ctime>
-#include <vector>
-
+﻿#include "Main.h"
 using namespace std;
 
-vector<int> massive;
-HANDLE startEvent;
-HANDLE* blockedEvents;
+std::vector<int> massive;
+CRITICAL_SECTION massLock;
+HANDLE startEvent = NULL;
 
-DWORD WINAPI marker(LPVOID argument_number)
+void Create_critical_sections_and_events() 
 {
-	WaitForSingleObject(startEvent, INFINITE);
-	int sequence_number = (int)(intptr_t)argument_number;
-	srand(sequence_number);
-	int count_of_marked = 0;
-	bool is_marked = true;
-	while (is_marked)
-	{
-		int random = rand();
-		int index = random % massive.size();
-		if (massive[index] == 0)
-		{
-			Sleep(5);
-			massive[index] = sequence_number;
-			count_of_marked = count_of_marked + 1;
-		}
-		else
-		{
-			cout << "Sequence number: " << sequence_number << endl;
-			cout << "Count of marked elements: " << count_of_marked << endl;
-			cout << "Index of unmarked element: " << index << endl;
-			is_marked = false;
-			SetEvent(blockedEvents[sequence_number]);
-			SuspendThread(GetCurrentThread);
-		}
-	}
-	return 0;
+    InitializeCriticalSection(&massLock);
+    startEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
 }
 
-int Input()
+void Create_markers(vector<Marker*>& markers, int number_of_threads) 
 {
-	cout << "Input massive size: ";
-	int size;
-	cin >> size;
-	massive.resize(size, 0);
-	cout << "Input the number of threads: ";
-	int number_of_threads;
-	cin >> number_of_threads;
-	return number_of_threads;
+    for (int i = 0; i < number_of_threads; ++i) 
+    {
+        markers.push_back(new Marker(i + 1, startEvent, &massLock, massive));
+    }
 }
 
-void Create_threads(int number_of_threads)
+int Find_complete_thread_index(vector<Marker*> active_markers, int complete_thread_number)
 {
-	startEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
+    int index = 0;
+    while (index < active_markers.size())
+    {
+        if (active_markers[index]->getSequenceNumber() == complete_thread_number)
+        {
+            break;
+        }
+        ++index;
+    }
 
-	DWORD* ID_markerThread = new DWORD[number_of_threads];
-	HANDLE* markers = new HANDLE[number_of_threads];
-	for (int i = 0; i < number_of_threads; i++)
-	{
-		markers[i] = CreateThread(NULL, 0, marker, (LPVOID)(intptr_t)i, 0, &ID_markerThread[i]);
-	}
-
-	blockedEvents = new HANDLE[number_of_threads];
-	for (int i = 0; i < number_of_threads; i++)
-	{
-		blockedEvents[i] = CreateEvent(NULL, FALSE, FALSE, NULL);
-	}
-
-	if (startEvent != NULL)
-	{
-		SetEvent(startEvent);
-	}
-	WaitForMultipleObjects(number_of_threads, blockedEvents, TRUE, INFINITE);
+    if (index == active_markers.size())
+    {
+        cout << endl << "There is no thread with this sequence number!" << endl;
+        return - 1;
+    }
+    
+    return index;
 }
 
-void Massive_output()
+void Delete_complete_thread(vector<Marker*>& active_markers, vector<HANDLE>& active_blocked_events, int index)
 {
-	cout << "Massive: " << massive[0];
-	for (int i = 0; i < massive.size(); i++)
-	{
-		cout << " " << massive[i];
-	}
-	cout << endl;
-}
-
-int Input_index()
-{
-	cout << "Input the number of the thread to complete";
-	int complete_thread_number;
-	cin >> complete_thread_number;
-	return complete_thread_number;
+    delete active_markers[index];
+    active_markers.erase(active_markers.begin() + index);
+    active_blocked_events.erase(active_blocked_events.begin() + index);
 }
 
 int main()
 {
-	int number_of_threads = Input();
-	Create_threads(number_of_threads);
-	Massive_output();
-	int complete_thread_number = Input_index();
+    int size = Input_size();
+    massive.resize(size, 0);
+    Create_critical_sections_and_events();
+    int number_of_threads = Input_threads_number();
+    vector<Marker*> active_markers;
+    Create_markers(active_markers, number_of_threads);
+    vector<HANDLE> active_blocked_events;
+    for(Marker* m : active_markers)
+    {
+        active_blocked_events.push_back(m->getBlockedEvent());
+    }
 
-	return 0;
+    SetEvent(startEvent);
+
+    while (!active_markers.empty()) 
+    {
+        WaitForMultipleObjects(static_cast<DWORD>(active_blocked_events.size()), active_blocked_events.data(), TRUE, INFINITE);
+        Massive_output();
+
+        int complete_thread_number = Input_index();
+        int index = Find_complete_thread_index(active_markers, complete_thread_number);
+        if(index == -1)
+        {
+            return 1;
+        }
+
+        active_markers[index]->setAction(Finish);
+        SetEvent(active_markers[index]->getControlEvent());
+        WaitForSingleObject(active_markers[index]->getThreadHandle(), INFINITE);
+        Delete_complete_thread(active_markers, active_blocked_events, index);
+        Massive_output();
+
+        for (Marker* m : active_markers)
+        {
+            m->setAction(Continue);
+            SetEvent(m->getControlEvent());
+        }
+    }
+
+    DeleteCriticalSection(&massLock);
+    CloseHandle(startEvent);
+
+    return 0;
 }
