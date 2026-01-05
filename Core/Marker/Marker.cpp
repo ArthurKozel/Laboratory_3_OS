@@ -69,10 +69,10 @@ DWORD Marker::marker()
         }
         else 
         {
-            LeaveCriticalSection(massLock);
             cout << endl << "Sequence number: " << sequenceNumber << endl;
             cout << "Count of marked elements: " << count_of_marked << endl;
             cout << "Index of unmarked element: " << index << endl;
+            LeaveCriticalSection(massLock);
             SetEvent(blockedEvent);
             WaitForSingleObject(controlEvent, INFINITE);
             if (status == Finish) 
